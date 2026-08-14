@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       zip_url:
-        description: 'Optional direct URL to download zip (leave empty if repo contains code)'
+        description: 'Optional direct URL to download zip'
         required: false
         default: ''
 
@@ -18,12 +18,12 @@ jobs:
 
     steps:
 
-      # Step 1: Checkout Repository
+      # 1. Checkout
       - name: Checkout Repository
         uses: actions/checkout@v4
 
 
-      # Step 2: Auto Find & Extract ZIP
+      # 2. Find and Extract ZIP
       - name: Auto Find & Extract Zip File
         run: |
           echo "=== Checking for ZIP files ==="
@@ -37,7 +37,7 @@ jobs:
 
           if [ -n "$ZIP_FILE" ]; then
             echo "Found ZIP: $ZIP_FILE"
-            
+
             rm -rf extracted_temp
             mkdir -p extracted_temp
 
@@ -53,60 +53,90 @@ jobs:
               if [ -n "$SUBDIR" ] && [ -f "$SUBDIR/package.json" ]; then
                 cp -r "$SUBDIR"/* .
               else
-                echo "No package.json found in ZIP root."
-                find extracted_temp -maxdepth 3 -type f | head -n 50
+                echo "Searching deeper for package.json..."
+
+                PROJECT_DIR=$(find extracted_temp -type f -name "package.json" -print -quit | xargs -r dirname)
+
+                if [ -n "$PROJECT_DIR" ]; then
+                  cp -r "$PROJECT_DIR"/* .
+                else
+                  echo "ERROR: package.json not found."
+                  exit 1
+                fi
               fi
             fi
 
             rm -rf extracted_temp
 
-            echo "ZIP extraction completed."
+            echo "=== ZIP extraction completed ==="
 
           else
             echo "No ZIP found."
-            echo "Building directly from repository."
+            echo "Using repository files."
           fi
 
 
-      # Step 3: Setup Node.js
-      - name: Setup Node.js 20
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: package-lock.json
-
-
-      # Step 4: Install Dependencies
-      - name: Install Dependencies
+      # 3. Check Project
+      - name: Check Project Files
         run: |
-          echo "=== Installing Node dependencies ==="
+          echo "=== Project root ==="
+          pwd
 
-          if [ -f "package-lock.json" ]; then
-            npm ci || npm install
+          echo "=== Files ==="
+          ls -la
+
+          echo "=== package.json ==="
+
+          if [ -f "package.json" ]; then
+            echo "package.json FOUND"
           else
-            npm install
-          fi
-
-
-      # Step 5: Build Web Application
-      - name: Build Web Application
-        run: |
-          echo "=== Building Web Application ==="
-          npm run build
-
-          echo "=== Checking dist folder ==="
-
-          if [ -d "dist" ]; then
-            echo "dist folder found."
-            ls -la dist
-          else
-            echo "ERROR: dist folder not found."
+            echo "ERROR: package.json NOT FOUND"
             exit 1
           fi
 
 
-      # Step 6: Setup Java JDK 17
+      # 4. Setup Node.js
+      # IMPORTANT:
+      # No npm cache here because ZIP is extracted during workflow.
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+
+      # 5. Install Dependencies
+      - name: Install Dependencies
+        run: |
+          echo "=== Installing dependencies ==="
+
+          if [ -f "package-lock.json" ]; then
+            echo "package-lock.json found"
+            npm ci || npm install
+          else
+            echo "package-lock.json not found"
+            npm install
+          fi
+
+
+      # 6. Build Web Application
+      - name: Build Web Application
+        run: |
+          echo "=== Building web application ==="
+
+          npm run build
+
+          echo "=== Checking dist ==="
+
+          if [ -d "dist" ]; then
+            echo "dist folder FOUND"
+            ls -la dist
+          else
+            echo "ERROR: dist folder not found"
+            exit 1
+          fi
+
+
+      # 7. Setup Java 17
       - name: Setup Java JDK 17
         uses: actions/setup-java@v4
         with:
@@ -114,17 +144,17 @@ jobs:
           java-version: '17'
 
 
-      # Step 7: Setup Android SDK
+      # 8. Setup Android SDK
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
 
-      # Step 8: Setup Gradle
+      # 9. Setup Gradle
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
 
-      # Step 9: Enable AndroidX
+      # 10. Enable AndroidX
       - name: Enable AndroidX
         run: |
           echo "=== Enabling AndroidX ==="
@@ -149,7 +179,7 @@ jobs:
           cat android/gradle.properties
 
 
-      # Step 10: Sync Web Files to Android Assets
+      # 11. Sync Web App to Android
       - name: Sync Assets to Android Project
         run: |
           echo "=== Preparing Android assets ==="
@@ -160,12 +190,30 @@ jobs:
 
           cp -r dist/* android/app/src/main/assets/public/
 
-          echo "=== Assets copied successfully ==="
+          echo "=== Assets copied ==="
 
           ls -la android/app/src/main/assets/public/
 
 
-      # Step 11: Prepare Gradle Wrapper
+      # 12. Check Android Project
+      - name: Check Android Project
+        run: |
+          echo "=== Checking Android project ==="
+
+          if [ ! -d "android" ]; then
+            echo "ERROR: android folder not found"
+            exit 1
+          fi
+
+          if [ ! -f "android/app/build.gradle" ] && [ ! -f "android/app/build.gradle.kts" ]; then
+            echo "ERROR: Android app Gradle file not found"
+            exit 1
+          fi
+
+          echo "Android project found."
+
+
+      # 13. Create Gradle Wrapper
       - name: Prepare Gradle Wrapper
         run: |
           cd android
@@ -181,7 +229,7 @@ jobs:
           echo "Gradle wrapper ready."
 
 
-      # Step 12: Clean Android Project
+      # 14. Clean
       - name: Clean Android Project
         run: |
           cd android
@@ -193,14 +241,16 @@ jobs:
             --stacktrace
 
 
-      # Step 13: Build Debug APK
+      # 15. Build APK
       - name: Build Test Mitra APK
         run: |
           cd android
 
           chmod +x gradlew
 
-          echo "=== Building TEST MITRA APK ==="
+          echo "================================"
+          echo "   BUILDING TEST MITRA APK"
+          echo "================================"
 
           ./gradlew assembleDebug \
             --no-daemon \
@@ -208,7 +258,7 @@ jobs:
             --warning-mode all
 
 
-      # Step 14: Check APK
+      # 16. Check APK
       - name: Check Generated APK
         run: |
           echo "=== Searching for APK ==="
@@ -227,10 +277,12 @@ jobs:
             exit 1
           fi
 
-          echo "APK generated successfully."
+          echo "================================"
+          echo "APK GENERATED SUCCESSFULLY"
+          echo "================================"
 
 
-      # Step 15: Upload APK
+      # 17. Upload APK
       - name: Upload Test Mitra APK
         uses: actions/upload-artifact@v4
         with:
