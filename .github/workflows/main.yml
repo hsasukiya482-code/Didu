@@ -1,0 +1,108 @@
+name: Build Android APK from Zip or Repo
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      zip_url:
+        description: 'Optional direct URL to download zip (leave empty if repo contains code)'
+        required: false
+        default: ''
+
+jobs:
+  build-apk:
+    name: Auto Extract & Build Test Mitra APK
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Checkout the repo
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # Step 2: Auto-detect and extract any ZIP file if uploaded to repo
+      - name: Auto Find & Extract Zip File (if any exists)
+        run: |
+          echo "=== Checking for ZIP files ==="
+          if [ -n "${{ github.event.inputs.zip_url }}" ]; then
+            echo "Downloading ZIP from ${{ github.event.inputs.zip_url }}..."
+            curl -L "${{ github.event.inputs.zip_url }}" -o uploaded_app.zip
+          fi
+
+          # Find any .zip file in root
+          ZIP_FILE=$(find . -maxdepth 2 -name "*.zip" | head -n 1)
+          if [ -n "$ZIP_FILE" ]; then
+            echo "Found ZIP file: $ZIP_FILE. Auto extracting..."
+            mkdir -p extracted_temp
+            unzip -o "$ZIP_FILE" -d extracted_temp/
+            
+            # Check if zip had a root folder or extracted directly
+            if [ -f "extracted_temp/package.json" ]; then
+              cp -r extracted_temp/* .
+            else
+              SUBDIR=$(find extracted_temp -mindepth 1 -maxdepth 1 -type d | head -n 1)
+              if [ -n "$SUBDIR" ] && [ -f "$SUBDIR/package.json" ]; then
+                cp -r $SUBDIR/* .
+              fi
+            fi
+            rm -rf extracted_temp
+            echo "Extracted successfully!"
+          else
+            echo "No zip file found, building directly from repository files."
+          fi
+
+      # Step 3: Setup Node.js Environment
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # Step 4: Install dependencies & Build Web App
+      - name: Build Web Application
+        run: |
+          if [ -f "package-lock.json" ]; then
+            npm ci || npm install
+          else
+            npm install
+          fi
+          npm run build
+
+      # Step 5: Setup Java JDK 17
+      - name: Setup Java JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      # Step 6: Setup Android SDK Tools
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      # Step 7: Setup Gradle
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      # Step 8: Sync Web Dist Files to Android WebView Assets
+      - name: Sync Assets to Android Project
+        run: |
+          mkdir -p android/app/src/main/assets/public
+          cp -r dist/* android/app/src/main/assets/public/ || true
+
+      # Step 9: Build Standalone Android APK
+      - name: Build Test Mitra APK
+        run: |
+          cd android
+          gradle wrapper --gradle-version 8.2 --distribution-type all
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      # Step 10: Upload the Generated APK directly to Artifacts
+      - name: Upload Test Mitra APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: TestMitra-Latest-APK
+          path: |
+            android/app/build/outputs/apk/debug/*.apk
+            android/app/build/outputs/apk/*/*.apk
+          retention-days: 30
+          if-no-files-found: error
