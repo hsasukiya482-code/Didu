@@ -1,0 +1,127 @@
+name: Build Test Mitra APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  build:
+    name: Build Test Mitra APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Fix Android resources
+        shell: bash
+        run: |
+          set -e
+
+          APP_DIR="android/app"
+
+          if [ ! -d "$APP_DIR" ]; then
+            echo "ERROR: android/app folder not found"
+            exit 1
+          fi
+
+          mkdir -p "$APP_DIR/src/main/res/values"
+          mkdir -p "$APP_DIR/src/main/res/drawable"
+          mkdir -p "$APP_DIR/src/main/res/mipmap-hdpi"
+          mkdir -p "$APP_DIR/src/main/res/mipmap-mdpi"
+          mkdir -p "$APP_DIR/src/main/res/mipmap-xhdpi"
+          mkdir -p "$APP_DIR/src/main/res/mipmap-xxhdpi"
+          mkdir -p "$APP_DIR/src/main/res/mipmap-xxxhdpi"
+
+          cat > "$APP_DIR/src/main/res/values/themes.xml" <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+
+              <style name="Theme.TestMitra"
+                  parent="android:style/Theme.Material.Light.NoActionBar">
+                  <item name="android:fontFamily">sans</item>
+                  <item name="android:windowNoTitle">true</item>
+                  <item name="android:colorAccent">#2196F3</item>
+                  <item name="android:statusBarColor">#FFFFFF</item>
+                  <item name="android:navigationBarColor">#FFFFFF</item>
+                  <item name="android:windowLightStatusBar">true</item>
+              </style>
+
+          </resources>
+          EOF
+
+          cat > "$APP_DIR/src/main/res/drawable/ic_launcher_placeholder.xml" <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp"
+              android:height="108dp"
+              android:viewportWidth="108"
+              android:viewportHeight="108">
+
+              <path
+                  android:fillColor="#2196F3"
+                  android:pathData="M0,0 L108,0 L108,108 L0,108 Z" />
+
+          </vector>
+          EOF
+
+          for DIR in \
+            mipmap-mdpi \
+            mipmap-hdpi \
+            mipmap-xhdpi \
+            mipmap-xxhdpi \
+            mipmap-xxxhdpi
+          do
+            cp "$APP_DIR/src/main/res/drawable/ic_launcher_placeholder.xml" \
+               "$APP_DIR/src/main/res/$DIR/ic_launcher.xml"
+
+            cp "$APP_DIR/src/main/res/drawable/ic_launcher_placeholder.xml" \
+               "$APP_DIR/src/main/res/$DIR/ic_launcher_round.xml"
+          done
+
+          MANIFEST="$APP_DIR/src/main/AndroidManifest.xml"
+
+          if [ -f "$MANIFEST" ]; then
+            sed -i 's/android:icon="@mipmap\/ic_launcher"//g' "$MANIFEST"
+            sed -i 's/android:roundIcon="@mipmap\/ic_launcher_round"//g' "$MANIFEST"
+          fi
+
+          echo "Android resources fixed."
+
+      - name: Make Gradle executable
+        working-directory: android
+        run: chmod +x gradlew
+
+      - name: Clean
+        working-directory: android
+        run: ./gradlew clean
+
+      - name: Build Debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug --stacktrace --no-daemon
+
+      - name: Check APK
+        run: |
+          echo "========== APK =========="
+          find android/app/build/outputs/apk -type f -name "*.apk" -print
+          echo "========================="
+
+      - name: Upload TEST MITRA APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: TEST-MITRA-APK
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
